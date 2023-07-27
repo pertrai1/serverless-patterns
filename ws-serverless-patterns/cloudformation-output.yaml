@@ -1,0 +1,948 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "SAM Template for Serverless Patterns v8 - Observability - Dashboard\n",
+  "Parameters": {
+    "UserPoolAdminGroupName": {
+      "Description": "User pool group name for API administrators",
+      "Type": "String",
+      "Default": "apiAdmins"
+    }
+  },
+  "Outputs": {
+    "UsersTable": {
+      "Description": "DynamoDB Users table",
+      "Value": {
+        "Ref": "UsersTable"
+      }
+    },
+    "UsersFunction": {
+      "Description": "Lambda function used to perform actions on the users data",
+      "Value": {
+        "Ref": "UsersFunction"
+      }
+    },
+    "APIEndpoint": {
+      "Description": "API Gateway endpoint URL",
+      "Value": {
+        "Fn::Sub": "https://${RestAPI}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+      }
+    },
+    "UserPool": {
+      "Description": "Cognito User Pool ID",
+      "Value": {
+        "Ref": "UserPool"
+      }
+    },
+    "UserPoolClient": {
+      "Description": "Cognito User Pool Application Client ID",
+      "Value": {
+        "Ref": "UserPoolClient"
+      }
+    },
+    "UserPoolAdminGroupName": {
+      "Description": "User Pool group name for API administrators",
+      "Value": {
+        "Ref": "UserPoolAdminGroupName"
+      }
+    },
+    "CognitoLoginURL": {
+      "Description": "Cognito User Pool Application Client Hosted Login UI URL",
+      "Value": {
+        "Fn::Sub": "https://${UserPoolClient}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${UserPoolClient}&response_type=code&redirect_uri=http://localhost"
+      }
+    },
+    "CognitoAuthCommand": {
+      "Description": "AWS CLI command for Amazon Cognito User Pool authentication",
+      "Value": {
+        "Fn::Sub": "aws cognito-idp initiate-auth --auth-flow USER_PASSWORD_AUTH --client-id ${UserPoolClient} --auth-parameters USERNAME=<username>,PASSWORD=<password>"
+      }
+    },
+    "AlarmsTopic": {
+      "Description": "SNS Topic to be used for the alarms subscriptions",
+      "Value": {
+        "Ref": "AlarmsTopic"
+      }
+    },
+    "DashboardURL": {
+      "Description": "Dashboard URL",
+      "Value": {
+        "Fn::Sub": "https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ApplicationDashboard}"
+      }
+    }
+  },
+  "Resources": {
+    "UserPoolClient": {
+      "Type": "AWS::Cognito::UserPoolClient",
+      "Properties": {
+        "ClientName": {
+          "Fn::Sub": "${AWS::StackName}UserPoolClient"
+        },
+        "ExplicitAuthFlows": [
+          "ALLOW_USER_PASSWORD_AUTH",
+          "ALLOW_USER_SRP_AUTH",
+          "ALLOW_REFRESH_TOKEN_AUTH"
+        ],
+        "GenerateSecret": false,
+        "PreventUserExistenceErrors": "ENABLED",
+        "RefreshTokenValidity": 30,
+        "SupportedIdentityProviders": [
+          "COGNITO"
+        ],
+        "UserPoolId": {
+          "Ref": "UserPool"
+        },
+        "AllowedOAuthFlowsUserPoolClient": true,
+        "AllowedOAuthFlows": [
+          "code"
+        ],
+        "AllowedOAuthScopes": [
+          "email",
+          "openid"
+        ],
+        "CallbackURLs": [
+          "http://localhost"
+        ]
+      },
+      "Metadata": {
+        "SamResourceId": "UserPoolClient"
+      }
+    },
+    "AccessLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "DependsOn": "ApiLoggingRole",
+      "Properties": {
+        "RetentionInDays": 30,
+        "LogGroupName": {
+          "Fn::Sub": "/${AWS::StackName}/APIAccessLogs"
+        }
+      },
+      "Metadata": {
+        "SamResourceId": "AccessLogs"
+      }
+    },
+    "AuthorizerFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Metadata": {
+        "SamResourceId": "AuthorizerFunction"
+      },
+      "Properties": {
+        "Code": {
+          "S3Bucket": "aws-sam-cli-managed-default-samclisourcebucket-a16g8q5xa97y",
+          "S3Key": "ws-serverless-patterns/ae6a388b749b71c6560e84d688f73441"
+        },
+        "Description": "Handler for Lambda authorizer",
+        "Handler": "src/api/authorizer.lambda_handler",
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "AuthorizerFunctionRole",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.9",
+        "Timeout": 100,
+        "Environment": {
+          "Variables": {
+            "USER_POOL_ID": {
+              "Ref": "UserPool"
+            },
+            "APPLICATION_CLIENT_ID": {
+              "Ref": "UserPoolClient"
+            },
+            "ADMIN_GROUP_NAME": {
+              "Ref": "UserPoolAdminGroupName"
+            }
+          }
+        },
+        "Tags": [
+          {
+            "Key": "lambda:createdBy",
+            "Value": "SAM"
+          },
+          {
+            "Key": "Stack",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}"
+            }
+          }
+        ],
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      }
+    },
+    "UsersFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Metadata": {
+        "SamResourceId": "UsersFunction"
+      },
+      "Properties": {
+        "Code": {
+          "S3Bucket": "aws-sam-cli-managed-default-samclisourcebucket-a16g8q5xa97y",
+          "S3Key": "ws-serverless-patterns/ae6a388b749b71c6560e84d688f73441"
+        },
+        "Description": "Handler for all users related operations",
+        "Handler": "src/api/users.lambda_handler",
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "UsersFunctionRole",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.9",
+        "Timeout": 100,
+        "Environment": {
+          "Variables": {
+            "USERS_TABLE": {
+              "Ref": "UsersTable"
+            }
+          }
+        },
+        "Tags": [
+          {
+            "Key": "lambda:createdBy",
+            "Value": "SAM"
+          },
+          {
+            "Key": "Stack",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}"
+            }
+          }
+        ],
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      }
+    },
+    "RestAPI": {
+      "Type": "AWS::ApiGateway::RestApi",
+      "Metadata": {
+        "SamResourceId": "RestAPI"
+      },
+      "Properties": {
+        "Body": {
+          "info": {
+            "version": "1.0",
+            "title": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          "paths": {
+            "/users/{userid}": {
+              "put": {
+                "x-amazon-apigateway-integration": {
+                  "httpMethod": "POST",
+                  "type": "aws_proxy",
+                  "uri": {
+                    "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UsersFunction.Arn}/invocations"
+                  }
+                },
+                "security": [
+                  {
+                    "LambdaTokenAuthorizer": []
+                  }
+                ],
+                "responses": {}
+              },
+              "get": {
+                "x-amazon-apigateway-integration": {
+                  "httpMethod": "POST",
+                  "type": "aws_proxy",
+                  "uri": {
+                    "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UsersFunction.Arn}/invocations"
+                  }
+                },
+                "security": [
+                  {
+                    "LambdaTokenAuthorizer": []
+                  }
+                ],
+                "responses": {}
+              },
+              "delete": {
+                "x-amazon-apigateway-integration": {
+                  "httpMethod": "POST",
+                  "type": "aws_proxy",
+                  "uri": {
+                    "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UsersFunction.Arn}/invocations"
+                  }
+                },
+                "security": [
+                  {
+                    "LambdaTokenAuthorizer": []
+                  }
+                ],
+                "responses": {}
+              }
+            },
+            "/users": {
+              "put": {
+                "x-amazon-apigateway-integration": {
+                  "httpMethod": "POST",
+                  "type": "aws_proxy",
+                  "uri": {
+                    "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UsersFunction.Arn}/invocations"
+                  }
+                },
+                "security": [
+                  {
+                    "LambdaTokenAuthorizer": []
+                  }
+                ],
+                "responses": {}
+              },
+              "get": {
+                "x-amazon-apigateway-integration": {
+                  "httpMethod": "POST",
+                  "type": "aws_proxy",
+                  "uri": {
+                    "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UsersFunction.Arn}/invocations"
+                  }
+                },
+                "security": [
+                  {
+                    "LambdaTokenAuthorizer": []
+                  }
+                ],
+                "responses": {}
+              }
+            }
+          },
+          "swagger": "2.0",
+          "securityDefinitions": {
+            "LambdaTokenAuthorizer": {
+              "in": "header",
+              "type": "apiKey",
+              "name": "Authorization",
+              "x-amazon-apigateway-authorizer": {
+                "type": "token",
+                "authorizerUri": {
+                  "Fn::Sub": [
+                    "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${__FunctionArn__}/invocations",
+                    {
+                      "__FunctionArn__": {
+                        "Fn::GetAtt": [
+                          "AuthorizerFunction",
+                          "Arn"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "x-amazon-apigateway-authtype": "custom"
+            }
+          }
+        }
+      }
+    },
+    "RestAPILambdaTokenAuthorizerAuthorizerPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "AuthorizerFunction",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": [
+            "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${__ApiId__}/authorizers/*",
+            {
+              "__ApiId__": {
+                "Ref": "RestAPI"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "UsersFunctionErrorsAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "AlarmsTopic"
+          }
+        ],
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "UsersFunction"
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 60,
+        "Statistic": "Sum",
+        "Threshold": 1
+      },
+      "Metadata": {
+        "SamResourceId": "UsersFunctionErrorsAlarm"
+      }
+    },
+    "UsersFunctionThrottlingAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "AlarmsTopic"
+          }
+        ],
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "UsersFunction"
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Throttles",
+        "Namespace": "AWS/Lambda",
+        "Period": 60,
+        "Statistic": "Sum",
+        "Threshold": 1
+      },
+      "Metadata": {
+        "SamResourceId": "UsersFunctionThrottlingAlarm"
+      }
+    },
+    "AuthorizerFunctionThrottlingAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "AlarmsTopic"
+          }
+        ],
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "AuthorizerFunction"
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Throttles",
+        "Namespace": "AWS/Lambda",
+        "Period": 60,
+        "Statistic": "Sum",
+        "Threshold": 1
+      },
+      "Metadata": {
+        "SamResourceId": "AuthorizerFunctionThrottlingAlarm"
+      }
+    },
+    "AuthorizerFunctionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Action": [
+                "sts:AssumeRole"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "lambda.amazonaws.com"
+                ]
+              }
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
+        ],
+        "Tags": [
+          {
+            "Key": "lambda:createdBy",
+            "Value": "SAM"
+          },
+          {
+            "Key": "Stack",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}"
+            }
+          }
+        ]
+      }
+    },
+    "AlarmsTopic": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Stack",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}"
+            }
+          }
+        ]
+      },
+      "Metadata": {
+        "SamResourceId": "AlarmsTopic"
+      }
+    },
+    "UsersTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": {
+          "Fn::Sub": "${AWS::StackName}-Users"
+        },
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "userid",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "userid",
+            "KeyType": "HASH"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST"
+      },
+      "Metadata": {
+        "SamResourceId": "UsersTable"
+      }
+    },
+    "ApiLoggingRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "apigateway.amazonaws.com"
+                ]
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Path": "/",
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+        ]
+      },
+      "Metadata": {
+        "SamResourceId": "ApiLoggingRole"
+      }
+    },
+    "UsersFunctionGetUserEventPermissionProd": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "UsersFunction"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": [
+            "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${__ApiId__}/${__Stage__}/GET/users/*",
+            {
+              "__ApiId__": {
+                "Ref": "RestAPI"
+              },
+              "__Stage__": "*"
+            }
+          ]
+        }
+      }
+    },
+    "UsersFunctionGetUsersEventPermissionProd": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "UsersFunction"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": [
+            "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${__ApiId__}/${__Stage__}/GET/users",
+            {
+              "__ApiId__": {
+                "Ref": "RestAPI"
+              },
+              "__Stage__": "*"
+            }
+          ]
+        }
+      }
+    },
+    "UserPoolDomain": {
+      "Type": "AWS::Cognito::UserPoolDomain",
+      "Properties": {
+        "Domain": {
+          "Ref": "UserPoolClient"
+        },
+        "UserPoolId": {
+          "Ref": "UserPool"
+        }
+      },
+      "Metadata": {
+        "SamResourceId": "UserPoolDomain"
+      }
+    },
+    "UsersFunctionUpdateUserEventPermissionProd": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "UsersFunction"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": [
+            "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${__ApiId__}/${__Stage__}/PUT/users/*",
+            {
+              "__ApiId__": {
+                "Ref": "RestAPI"
+              },
+              "__Stage__": "*"
+            }
+          ]
+        }
+      }
+    },
+    "ApiAdministratorsUserPoolGroup": {
+      "Type": "AWS::Cognito::UserPoolGroup",
+      "Properties": {
+        "Description": "User group for API Administrators",
+        "GroupName": {
+          "Ref": "UserPoolAdminGroupName"
+        },
+        "Precedence": 0,
+        "UserPoolId": {
+          "Ref": "UserPool"
+        }
+      },
+      "Metadata": {
+        "SamResourceId": "ApiAdministratorsUserPoolGroup"
+      }
+    },
+    "RestAPIProdStage": {
+      "Type": "AWS::ApiGateway::Stage",
+      "Properties": {
+        "AccessLogSetting": {
+          "DestinationArn": {
+            "Fn::GetAtt": [
+              "AccessLogs",
+              "Arn"
+            ]
+          },
+          "Format": "{ \"requestId\":\"$context.requestId\", \"ip\": \"$context.identity.sourceIp\", \"requestTime\":\"$context.requestTime\", \"httpMethod\":\"$context.httpMethod\",\"routeKey\":\"$context.routeKey\", \"status\":\"$context.status\",\"protocol\":\"$context.protocol\", \"integrationStatus\": $context.integrationStatus, \"integrationLatency\": $context.integrationLatency, \"responseLength\":\"$context.responseLength\" }"
+        },
+        "DeploymentId": {
+          "Ref": "RestAPIDeployment8f7679ab57"
+        },
+        "RestApiId": {
+          "Ref": "RestAPI"
+        },
+        "StageName": "Prod",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-API"
+            }
+          },
+          {
+            "Key": "Stack",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}"
+            }
+          }
+        ],
+        "TracingEnabled": true,
+        "MethodSettings": [
+          {
+            "HttpMethod": "*",
+            "ResourcePath": "/*",
+            "DataTraceEnabled": true,
+            "LoggingLevel": "INFO"
+          }
+        ]
+      }
+    },
+    "UsersFunctionPutUserEventPermissionProd": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "UsersFunction"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": [
+            "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${__ApiId__}/${__Stage__}/PUT/users",
+            {
+              "__ApiId__": {
+                "Ref": "RestAPI"
+              },
+              "__Stage__": "*"
+            }
+          ]
+        }
+      }
+    },
+    "AuthorizerFunctionErrorsAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "AlarmsTopic"
+          }
+        ],
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "AuthorizerFunction"
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 60,
+        "Statistic": "Sum",
+        "Threshold": 1
+      },
+      "Metadata": {
+        "SamResourceId": "AuthorizerFunctionErrorsAlarm"
+      }
+    },
+    "ApplicationDashboard": {
+      "Type": "AWS::CloudWatch::Dashboard",
+      "Properties": {
+        "DashboardName": {
+          "Fn::Sub": "${AWS::StackName}-dashboard"
+        },
+        "DashboardBody": {
+          "Fn::Sub": "{\n  \"widgets\": [\n      {\n          \"height\": 6,\n          \"width\": 6,\n          \"y\": 6,\n          \"x\": 0,\n          \"type\": \"metric\",\n          \"properties\": {\n              \"metrics\": [\n                  [ \"AWS/Lambda\", \"Invocations\", \"FunctionName\", \"${UsersFunction}\" ],\n                  [ \".\", \"Errors\", \".\", \".\" ],\n                  [ \".\", \"Throttles\", \".\", \".\" ],\n                  [ \".\", \"Duration\", \".\", \".\", { \"stat\": \"Average\" } ],\n                  [ \".\", \"ConcurrentExecutions\", \".\", \".\", { \"stat\": \"Maximum\" } ]\n              ],\n              \"view\": \"timeSeries\",\n              \"region\": \"${AWS::Region}\",\n              \"stacked\": false,\n              \"title\": \"Users Lambda\",\n              \"period\": 60,\n              \"stat\": \"Sum\"\n          }\n      },\n      {\n          \"height\": 6,\n          \"width\": 6,\n          \"y\": 6,\n          \"x\": 6,\n          \"type\": \"metric\",\n          \"properties\": {\n              \"metrics\": [\n                  [ \"AWS/Lambda\", \"Invocations\", \"FunctionName\", \"${AuthorizerFunction}\" ],\n                  [ \".\", \"Errors\", \".\", \".\" ],\n                  [ \".\", \"Throttles\", \".\", \".\" ],\n                  [ \".\", \"Duration\", \".\", \".\", { \"stat\": \"Average\" } ],\n                  [ \".\", \"ConcurrentExecutions\", \".\", \".\", { \"stat\": \"Maximum\" } ]\n              ],\n              \"view\": \"timeSeries\",\n              \"region\": \"${AWS::Region}\",\n              \"stacked\": false,\n              \"title\": \"Authorizer Lambda\",\n              \"period\": 60,\n              \"stat\": \"Sum\"\n          }\n      },\n      {\n          \"height\": 6,\n          \"width\": 12,\n          \"y\": 0,\n          \"x\": 0,\n          \"type\": \"metric\",\n          \"properties\": {\n              \"metrics\": [\n                  [ \"AWS/ApiGateway\", \"4XXError\", \"ApiName\", \"${AWS::StackName}\", { \"yAxis\": \"right\" } ],\n                  [ \".\", \"5XXError\", \".\", \".\", { \"yAxis\": \"right\" } ],\n                  [ \".\", \"DataProcessed\", \".\", \".\", { \"yAxis\": \"left\" } ],\n                  [ \".\", \"Count\", \".\", \".\", { \"label\": \"Count\", \"yAxis\": \"right\" } ],\n                  [ \".\", \"IntegrationLatency\", \".\", \".\", { \"stat\": \"Average\" } ],\n                  [ \".\", \"Latency\", \".\", \".\", { \"stat\": \"Average\" } ]\n              ],\n              \"view\": \"timeSeries\",\n              \"stacked\": false,\n              \"region\": \"${AWS::Region}\",\n              \"period\": 60,\n              \"stat\": \"Sum\",\n              \"title\": \"API Gateway\"\n          }\n      }\n  ]\n}\n"
+        }
+      },
+      "Metadata": {
+        "SamResourceId": "ApplicationDashboard"
+      }
+    },
+    "RestAPIDeployment8f7679ab57": {
+      "Type": "AWS::ApiGateway::Deployment",
+      "Properties": {
+        "Description": "RestApi deployment id: 8f7679ab570ed3f8c6e03fbf3fcb6022d23dcd97",
+        "RestApiId": {
+          "Ref": "RestAPI"
+        },
+        "StageName": "Stage"
+      }
+    },
+    "UserPool": {
+      "Type": "AWS::Cognito::UserPool",
+      "Properties": {
+        "UserPoolName": {
+          "Fn::Sub": "${AWS::StackName}-UserPool"
+        },
+        "AdminCreateUserConfig": {
+          "AllowAdminCreateUserOnly": false
+        },
+        "AutoVerifiedAttributes": [
+          "email"
+        ],
+        "Schema": [
+          {
+            "Name": "name",
+            "AttributeDataType": "String",
+            "Mutable": true,
+            "Required": true
+          },
+          {
+            "Name": "email",
+            "AttributeDataType": "String",
+            "Mutable": true,
+            "Required": true
+          }
+        ],
+        "UsernameAttributes": [
+          "email"
+        ],
+        "UserPoolTags": {
+          "Key": "Name",
+          "Value": {
+            "Fn::Sub": "${AWS::StackName} User Pool"
+          }
+        }
+      },
+      "Metadata": {
+        "SamResourceId": "UserPool"
+      }
+    },
+    "RestAPIErrorsAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "AlarmsTopic"
+          }
+        ],
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ApiName",
+            "Value": {
+              "Ref": "RestAPI"
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "5XXError",
+        "Namespace": "AWS/ApiGateway",
+        "Period": 60,
+        "Statistic": "Sum",
+        "Threshold": 1
+      },
+      "Metadata": {
+        "SamResourceId": "RestAPIErrorsAlarm"
+      }
+    },
+    "UsersFunctionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Action": [
+                "sts:AssumeRole"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "lambda.amazonaws.com"
+                ]
+              }
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "UsersFunctionRolePolicy0",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:Scan",
+                    "dynamodb:Query",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:BatchWriteItem",
+                    "dynamodb:BatchGetItem",
+                    "dynamodb:DescribeTable",
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    {
+                      "Fn::Sub": [
+                        "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${tableName}",
+                        {
+                          "tableName": {
+                            "Ref": "UsersTable"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "Fn::Sub": [
+                        "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${tableName}/index/*",
+                        {
+                          "tableName": {
+                            "Ref": "UsersTable"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "lambda:createdBy",
+            "Value": "SAM"
+          },
+          {
+            "Key": "Stack",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}"
+            }
+          }
+        ]
+      }
+    },
+    "UsersFunctionDeleteUserEventPermissionProd": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "UsersFunction"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": [
+            "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${__ApiId__}/${__Stage__}/DELETE/users/*",
+            {
+              "__ApiId__": {
+                "Ref": "RestAPI"
+              },
+              "__Stage__": "*"
+            }
+          ]
+        }
+      }
+    },
+    "ApiGatewayAccountLoggingSettings": {
+      "Type": "AWS::ApiGateway::Account",
+      "Properties": {
+        "CloudWatchRoleArn": {
+          "Fn::GetAtt": [
+            "ApiLoggingRole",
+            "Arn"
+          ]
+        }
+      },
+      "Metadata": {
+        "SamResourceId": "ApiGatewayAccountLoggingSettings"
+      }
+    }
+  }
+}
